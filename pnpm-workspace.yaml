@@ -1,0 +1,5 @@
+allowBuilds:
+  electron: true
+  electron-winstaller: false
+  sharp: false
+  unrs-resolver: false

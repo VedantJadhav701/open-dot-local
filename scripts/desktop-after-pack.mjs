@@ -1,0 +1,16 @@
+// electron-builder drops every node_modules folder from extraResources, whatever the filter says.
+// Copy the server's dependencies in after packing (this runs before signing, so they're signed too).
+// cp -RP keeps pnpm's relative symlinks exactly as they are.
+import fs from "node:fs";
+import path from "node:path";
+import { execFileSync } from "node:child_process";
+
+export default async function afterPack(context) {
+  const app = fs.readdirSync(context.appOutDir).find((f) => f.endsWith(".app"));
+  const resources = app ? path.join(context.appOutDir, app, "Contents", "Resources") : path.join(context.appOutDir, "resources");
+  const from = path.join(context.packager.projectDir, ".desktop", "server", "node_modules");
+  const to = path.join(resources, "server", "node_modules");
+  fs.rmSync(to, { recursive: true, force: true });
+  execFileSync("cp", ["-RP", from, to]);
+  console.log(`  • copied server node_modules → ${path.relative(context.appOutDir, to)}`);
+}
