@@ -32,7 +32,7 @@ const TRIGGER_APPS: Record<string, string> = {
 };
 
 
-const g = globalThis as unknown as { __dotsComposio?: { key: string; client: Composio }; __dotsTriggerSub?: string | null };
+const g = globalThis as unknown as { __dotsTriggerClient?: { key: string; client: Composio }; __dotsTriggerSub?: string | null };
 
 function envKey(): string | null {
   return process.env.COMPOSIO_API_KEY || null;
@@ -54,8 +54,8 @@ export const triggersKeySource = (): "env" | "settings" | null => (envKey() ? "e
 function client(): Composio {
   const key = apiKey();
   if (!key) throw new Error("Add a Composio API key in Settings to use triggers.");
-  if (g.__dotsComposio?.key !== key) g.__dotsComposio = { key, client: new Composio({ apiKey: key }) };
-  return g.__dotsComposio.client;
+  if (g.__dotsTriggerClient?.key !== key) g.__dotsTriggerClient = { key, client: new Composio({ apiKey: key }) };
+  return g.__dotsTriggerClient.client;
 }
 
 /** This install's user in the Composio project (stable, so its connections and triggers stay together). */
@@ -99,7 +99,11 @@ export async function triggerApps(): Promise<TriggerApp[]> {
 
 /** Link to connect an app for triggers (opens in the user's browser). */
 export async function connectTriggerApp(toolkit: string): Promise<string> {
-  const req = await client().toolkits.authorize(userId(), toolkit);
+  const c = client();
+  // The app's auth config in this project, or Composio's managed OAuth if the project has none yet.
+  const authConfigId =
+    (await c.authConfigs.list({ toolkit })).items[0]?.id ?? (await c.authConfigs.create(toolkit, { type: "use_composio_managed_auth", name: `${toolkit} (Open Dot)` })).id;
+  const req = await c.connectedAccounts.link(userId(), authConfigId);
   if (!req.redirectUrl) throw new Error(`${toolkit} is already connected, or doesn't need a sign-in.`);
   return req.redirectUrl;
 }
@@ -183,5 +187,5 @@ export async function startEvents() {
 async function stopEvents() {
   if (!g.__dotsTriggerSub) return;
   g.__dotsTriggerSub = null;
-  await g.__dotsComposio?.client.triggers.unsubscribe().catch(() => {});
+  await g.__dotsTriggerClient?.client.triggers.unsubscribe().catch(() => {});
 }

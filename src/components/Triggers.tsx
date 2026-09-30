@@ -300,7 +300,7 @@ function AddTrigger({ dot, apps, appsError, loadingApps, reloadApps, onDone }: {
             />
           </label>
           <div className="flex items-center gap-2">
-            <span className="text-caption text-foreground/45">{/(gmail|googlecalendar|googledrive)/.test(app?.slug ?? "") ? "Checked every 15 minutes." : "Runs as events come in."}</span>
+            <span className="text-caption text-foreground/45">{type.fields.some((f) => f.name === "interval") ? "Can take up to the interval (in minutes) to fire." : "Runs as events come in."}</span>
             <button type="button" className="btn-quiet ml-auto" onClick={onDone}>
               Cancel
             </button>

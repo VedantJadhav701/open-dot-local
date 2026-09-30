@@ -67,7 +67,7 @@ In development everything is stored in `.data/` in the project folder.
 
 - It's made to run on your own Mac. There's no login screen, so don't put it on a public server as it is.
 - Routines and triggers only run while the app is open. A routine that comes due while your Mac is asleep gets skipped, and so do trigger events that arrive then.
-- Gmail and Google Calendar triggers are checked every 15 minutes, so they can take a while to fire. Slack, Notion and Outlook events come in right away.
+- Most triggers fire within seconds. Ones with an Interval setting, like Gmail's, can take up to that many minutes.
 - Open models don't get OpenAI's computer tool. They click and type by the text on the page instead, which works on most sites but not on things drawn on a canvas. Voice calls still need an OpenAI key.
 - For bookings and purchases, the site needs a card saved in your account there, or you take over for the payment step.
 - Open Dot isn't affiliated with OpenAI.
