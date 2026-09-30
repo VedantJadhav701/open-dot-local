@@ -5,6 +5,7 @@ import { defaultMode } from "./computer";
 import { knownModels, hasKey, keySource } from "./agent/client";
 import { COMPUTER_ENABLED } from "./agent/tools";
 import { skyInstalled } from "./computer/sky";
+import { cloudKeySource } from "./computer/cloud";
 import { apps, signedIn } from "./composio";
 import type { ComputerInfo, Snapshot } from "@/lib/types";
 
@@ -19,6 +20,7 @@ export function computerInfo(): ComputerInfo {
     computerTool: COMPUTER_ENABLED ? "computer" : "off",
     hasKey: hasKey(),
     keySource: keySource(),
+    cloudKey: cloudKeySource(),
     sky: skyInstalled(),
     composio: signedIn(),
   };

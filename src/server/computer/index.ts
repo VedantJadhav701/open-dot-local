@@ -114,6 +114,8 @@ export async function handBack(dotId: string) {
   if (!isCloud(dotId)) await browser.handBack(dotId);
 }
 
+export { saveCloudKey } from "./cloud";
+
 // Live view of the local browser (the cloud computer has its own noVNC stream).
 export const streamScreen = browser.stream;
 export const userInput = browser.input;

@@ -103,14 +103,25 @@ function createWindow() {
   });
   win.once("ready-to-show", () => win.show());
 
-  // Our pages stay in the app; everything else opens in the default browser. A blank popup is how the app opens
-  // Composio sign-in (it fills in the URL a moment later), so that one opens as a small in-app window.
+  // Links and sign-ins open in the default browser, never in an Electron window. The app opens Composio sign-in
+  // as a blank popup and points it at the real URL a moment later, so that popup is kept hidden and its first
+  // real address is handed to the browser.
   win.webContents.setWindowOpenHandler(({ url }) => {
-    if (url === "about:blank" || isOurs(url)) {
-      return { action: "allow", overrideBrowserWindowOptions: { width: 560, height: 760, title: "Open Dot", autoHideMenuBar: true } };
-    }
+    if (url === "about:blank") return { action: "allow", overrideBrowserWindowOptions: { show: false } };
     if (/^https?:|^mailto:/.test(url)) void shell.openExternal(url);
     return { action: "deny" };
+  });
+  win.webContents.on("did-create-window", (child) => {
+    const forward = (e, maybeUrl) => {
+      const url = typeof maybeUrl === "string" ? maybeUrl : e?.url;
+      if (!url || !/^https?:/.test(url)) return;
+      void shell.openExternal(url);
+      if (!child.isDestroyed()) child.destroy();
+    };
+    child.webContents.on("will-navigate", forward);
+    child.webContents.on("did-start-navigation", forward);
+    // Nothing to hand off (the app closed the popup, or it never got a URL): don't leave a hidden window behind.
+    setTimeout(() => !child.isDestroyed() && child.destroy(), 30_000);
   });
   win.webContents.on("will-navigate", (e, url) => {
     if (isOurs(url) || url.startsWith("data:")) return;

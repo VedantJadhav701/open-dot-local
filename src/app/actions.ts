@@ -187,6 +187,13 @@ export async function setOpenAIKey(key: string): Promise<string | null> {
   return null;
 }
 
+/** Paste an E2B key in Settings for cloud computers (empty removes it). */
+export async function setCloudKey(key: string): Promise<string | null> {
+  const err = await computer.saveCloudKey(key.trim());
+  if (!err) emit({ type: "computer", data: computerInfo() });
+  return err;
+}
+
 export async function setDefaultModel(model: string | null) {
   setSetting("default_model", model);
   emit({ type: "computer", data: computerInfo() });

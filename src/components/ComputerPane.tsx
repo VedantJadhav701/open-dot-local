@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Suspense, use, useState, useTransition } from "react";
 import { Cloud, Hand, Laptop, MonitorSmartphone, RefreshCw, RotateCcw, Terminal, Undo2 } from "lucide-react";
 import { handBackComputer, resetComputer, setLocalAccess, takeOverComputer, wakeComputer } from "@/app/actions";
@@ -142,11 +143,19 @@ export default function ComputerPane({ dot }: { dot: Dot }) {
                 <>An isolated E2B cloud desktop. It sleeps after 10 idle minutes (keeping its files, apps, and logins) and wakes when {dot.name} needs it.</>
               ) : computer.mode === "docker" ? (
                 <>
-                  A local Linux container (<code className="font-mono text-[12px]">{computer.image}</code>) with a persistent workspace. Add <code className="font-mono text-[12px]">E2B_API_KEY</code> for a cloud computer that works while you&apos;re away.
+                  A local Linux container (<code className="font-mono text-[12px]">{computer.image}</code>) with a persistent workspace.{" "}
+                  <Link href="/settings#cloud-key" className="underline underline-offset-2 hover:text-foreground">
+                    Add an E2B key
+                  </Link>{" "}
+                  for a cloud computer that works while you&apos;re away.
                 </>
               ) : (
                 <>
-                  A sandbox folder on this Mac; commands ask first. Add <code className="font-mono text-[12px]">E2B_API_KEY</code> to <code className="font-mono text-[12px]">.env.local</code> for a real cloud computer.
+                  A sandbox folder on this Mac; commands ask first.{" "}
+                  <Link href="/settings#cloud-key" className="underline underline-offset-2 hover:text-foreground">
+                    Add an E2B key
+                  </Link>{" "}
+                  for a real cloud computer.
                 </>
               )}
             </p>

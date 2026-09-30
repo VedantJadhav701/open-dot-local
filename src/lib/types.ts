@@ -131,6 +131,7 @@ export type ComputerInfo = {
   computerTool: string;
   hasKey: boolean;
   keySource: "env" | "settings" | null;
+  cloudKey: "env" | "settings" | null; // E2B key for cloud computers
   sky: boolean; // OpenAI's Sky computer-use runtime is installed on this Mac
   composio: boolean; // COMPOSIO_API_KEY is set
 };

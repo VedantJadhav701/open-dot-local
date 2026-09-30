@@ -34,8 +34,10 @@ const pnpmDir = path.join(out, "node_modules/.pnpm");
 for (const d of fs.existsSync(pnpmDir) ? fs.readdirSync(pnpmDir) : []) if (/^electron(-builder)?@/.test(d)) fs.rmSync(path.join(pnpmDir, d), { recursive: true, force: true });
 fs.rmSync(path.join(out, "node_modules/electron"), { recursive: true, force: true });
 
-// Never ship local data.
-for (const p of [".data", ".env", ".env.local"]) fs.rmSync(path.join(out, p), { recursive: true, force: true });
+// Keep only what the server runs. Tracing also copies stray project files (source .ts, earlier desktop builds,
+// local data); none of it is needed, and some of it must never ship.
+const KEEP = new Set([".next", "node_modules", "public", "server.js", "package.json"]);
+for (const entry of fs.readdirSync(out)) if (!KEEP.has(entry)) fs.rmSync(path.join(out, entry), { recursive: true, force: true });
 // The packaged app gets its own copy. pnpm's symlinks stay (Node resolves packages through them), but every one
 // must be relative and stay inside the folder, or code signing rejects the app.
 const app = path.join(root, ".desktop/server");

@@ -3,7 +3,7 @@
 import { useState, useSyncExternalStore, useTransition } from "react";
 import { useSearchParams } from "next/navigation";
 import { Bell, KeyRound, Lock, LogOut, Plus, RefreshCw } from "lucide-react";
-import { connectApp, deletePassword, refreshApps, savePassword, setDefaultModel, setOpenAIKey, signInComposio, signOutComposio } from "@/app/actions";
+import { connectApp, deletePassword, refreshApps, savePassword, setCloudKey, setDefaultModel, setOpenAIKey, signInComposio, signOutComposio } from "@/app/actions";
 import { useStore } from "@/lib/store";
 import { openAfter } from "@/lib/popup";
 import { Empty, PageHeader, RemoveButton, RuleEditor, Section } from "./SettingsKit";
@@ -113,6 +113,7 @@ export default function SettingsView() {
 
         <Section eyebrow="Engine" title="Models & computers" description="The models list comes from what your OpenAI key can use.">
           <ApiKey />
+          <CloudKey />
           <div className="surface mb-3 flex items-center gap-3 p-4">
             <div className="flex-1">
               <div className="text-[14px]">Default model</div>
@@ -280,6 +281,66 @@ function ApiKey() {
           }}
         >
           <input className="field font-mono text-[13px]" type="password" placeholder="sk-..." value={key} onChange={(e) => setKey(e.target.value)} autoComplete="off" />
+          <button className="btn-primary shrink-0" disabled={pending || !key.trim()}>
+            {pending ? "Checking…" : "Save"}
+          </button>
+        </form>
+      )}
+      {error && <p className="mt-2 text-caption text-destructive">{error}</p>}
+    </div>
+  );
+}
+
+/** Optional E2B key: each dot gets a cloud computer that keeps working while this Mac sleeps. */
+function CloudKey() {
+  const computer = useStore((s) => s.computer);
+  const [editing, setEditing] = useState(false);
+  const [key, setKey] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [pending, start] = useTransition();
+  const saved = computer.cloudKey !== null;
+  const save = (value: string) =>
+    start(async () => {
+      const err = await setCloudKey(value);
+      setError(err);
+      if (!err) (setKey(""), setEditing(false));
+    });
+
+  return (
+    <div id="cloud-key" className="surface mb-3 scroll-mt-6 p-4">
+      <div className="flex items-center gap-3">
+        <div className="flex-1">
+          <div className="text-[14px]">
+            Cloud computers <span className="text-foreground/40">· optional</span>
+          </div>
+          <div className="text-body-sm text-foreground/55">
+            {computer.cloudKey === "env"
+              ? "Connected from E2B_API_KEY."
+              : saved
+                ? "Connected. Each dot gets its own E2B cloud computer that keeps working while your Mac sleeps."
+                : "Paste an E2B API key (from e2b.dev) to give each dot a cloud computer that keeps working while your Mac sleeps."}
+          </div>
+        </div>
+        {computer.cloudKey === "settings" && !editing && (
+          <>
+            <button className="btn-quiet h-8 px-3 text-[13px]" disabled={pending} onClick={() => save("")}>
+              Remove
+            </button>
+            <button className="btn-secondary h-8 px-3 text-[13px]" onClick={() => setEditing(true)}>
+              Change
+            </button>
+          </>
+        )}
+      </div>
+      {(editing || !saved) && computer.cloudKey !== "env" && (
+        <form
+          className="mt-3 flex gap-2"
+          onSubmit={(e) => {
+            e.preventDefault();
+            save(key);
+          }}
+        >
+          <input className="field font-mono text-[13px]" type="password" placeholder="e2b_..." value={key} onChange={(e) => setKey(e.target.value)} autoComplete="off" />
           <button className="btn-primary shrink-0" disabled={pending || !key.trim()}>
             {pending ? "Checking…" : "Save"}
           </button>

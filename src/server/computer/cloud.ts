@@ -2,6 +2,8 @@ import "server-only";
 import { Sandbox } from "@e2b/desktop";
 import * as repo from "../repo";
 import { emit } from "../bus";
+import { getSetting, setSetting } from "../db";
+import { seal, unseal } from "../vault";
 import { CDP_HELPER, CDP_HELPER_PATH } from "./cdp-helper";
 import type { ComputerAction } from "./browser";
 
@@ -14,7 +16,45 @@ export const WORKSPACE = "/home/user/workspace";
 const IDLE_MS = 10 * 60_000;
 const MAX_OUTPUT = 12_000;
 
-export const cloudEnabled = () => Boolean(process.env.E2B_API_KEY);
+// The E2B key comes from E2B_API_KEY (development) or from Settings, sealed with the vault key (the desktop app
+// has no .env). The E2B SDK reads process.env, so a saved key is loaded there.
+const KEY_SETTING = "e2b_key";
+const KEY_FROM_ENV = Boolean(process.env.E2B_API_KEY);
+
+function loadSavedKey() {
+  if (KEY_FROM_ENV) return;
+  const sealed = getSetting(KEY_SETTING);
+  let key: string | null = null;
+  try {
+    key = sealed ? unseal(sealed) : null;
+  } catch {}
+  if (key) process.env.E2B_API_KEY = key;
+  else delete process.env.E2B_API_KEY;
+}
+
+export const cloudEnabled = () => (loadSavedKey(), Boolean(process.env.E2B_API_KEY));
+
+export const cloudKeySource = (): "env" | "settings" | null => (KEY_FROM_ENV ? "env" : getSetting(KEY_SETTING) ? "settings" : null);
+
+/** Check the key with E2B, then save it (encrypted). Empty removes it. Returns an error message or null. */
+export async function saveCloudKey(key: string): Promise<string | null> {
+  if (KEY_FROM_ENV) return "The E2B key is set by E2B_API_KEY.";
+  if (!key) {
+    setSetting(KEY_SETTING, null);
+    loadSavedKey();
+    return null;
+  }
+  try {
+    const res = await fetch("https://api.e2b.dev/sandboxes", { headers: { "X-API-Key": key } });
+    if (res.status === 401 || res.status === 403) return "E2B didn't accept that key.";
+    if (!res.ok) return `Couldn't check the key with E2B (${res.status}).`;
+  } catch (err) {
+    return `Couldn't reach E2B: ${err instanceof Error ? err.message : String(err)}`;
+  }
+  setSetting(KEY_SETTING, seal(key));
+  loadSavedKey();
+  return null;
+}
 
 type Box = { sb: Sandbox; streaming: boolean; lastShot: Buffer | null; touchedAt: number };
 const g = globalThis as unknown as { __dotsBoxes?: Map<string, Promise<Box>> };
