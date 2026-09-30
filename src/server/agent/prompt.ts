@@ -8,6 +8,7 @@ import type { Dot } from "@/lib/types";
 export type Trigger =
   | { kind: "chat" }
   | { kind: "routine"; name: string }
+  | { kind: "trigger"; name: string }
   | { kind: "dot"; from: string }
   | { kind: "channel"; channelId: string; name: string };
 
@@ -67,7 +68,9 @@ ${others.length ? others.map((d) => `- ${d.name}${d.purpose ? `: ${d.purpose}` :
 # Now
 ${new Date().toString()} (timezone ${tz}).
 ${
-  trigger.kind === "routine"
+  trigger.kind === "trigger"
+    ? `This run was started by your trigger "${trigger.name}": something just happened in one of the user's apps (the event data is below). The user is not watching. Follow the trigger's instruction; anything that sends, posts, pays or changes something still needs approval. Report back with send_update (with a title) only if there's something worth telling them.`
+    : trigger.kind === "routine"
     ? `This run was started by your routine "${trigger.name}". The user is not watching — do the work, then deliver the result with send_update (with a title). If there's nothing worth reporting, say so briefly without send_update.`
     : trigger.kind === "channel"
       ? channelContext(dot, trigger.channelId)

@@ -2,6 +2,7 @@ import "server-only";
 import OpenAI from "openai";
 import { getSetting, setSetting } from "../db";
 import { seal, unseal } from "../vault";
+import { isOpenRouterModel, openModels, openRouterId, openRouterKey, openrouter, preferredOpenModel, smallOpenModel } from "./openrouter";
 
 // Models are chosen from what the API key can actually use. Precedence for a dot's model:
 // the dot's own choice → the default picked in Settings → DOTS_MODEL → best available.
@@ -56,8 +57,7 @@ export async function saveApiKey(key: string): Promise<string | null> {
     return err instanceof Error && /401|Incorrect API key|invalid/i.test(err.message) ? "OpenAI didn't accept that key." : `Couldn't check the key: ${err instanceof Error ? err.message : String(err)}`;
   }
   setSetting(KEY_SETTING, seal(key));
-  g.__dotsModels = undefined;
-  g.__dotsResolved = undefined;
+  resetModels();
   return null;
 }
 
@@ -75,7 +75,8 @@ function rank(id: string): number {
   return version + tier;
 }
 
-async function resolve() {
+async function resolveOpenAI(): Promise<{ main: string; review: string; available: string[] } | null> {
+  if (!apiKey()) return null;
   let ids: string[] = [];
   try {
     for await (const m of openai().models.list()) ids.push(m.id);
@@ -86,14 +87,46 @@ async function resolve() {
   const set = new Set(ids);
   const pick = (envVar: string | undefined, prefs: string[]) => envVar || prefs.find((id) => set.has(id)) || prefs[0];
   const available = ids.filter(isAgentModel).sort((a, b) => rank(b) - rank(a) || a.localeCompare(b));
-  const resolved = {
+  return {
     main: pick(process.env.DOTS_MODEL, MAIN_PREFERENCE),
     review: pick(process.env.DOTS_REVIEW_MODEL, REVIEW_PREFERENCE),
     available: available.length ? available : MAIN_PREFERENCE,
   };
+}
+
+/** OpenAI models (with an OpenAI key) first, then open models (with an OpenRouter key). */
+async function resolve() {
+  const [oa, open] = await Promise.all([
+    resolveOpenAI(),
+    openModels().catch((err) => {
+      console.warn("[dots] couldn't list OpenRouter models:", err instanceof Error ? err.message : err);
+      return [] as string[];
+    }),
+  ]);
+  const resolved = {
+    main: oa?.main ?? (open.length ? preferredOpenModel(open) : process.env.DOTS_MODEL || MAIN_PREFERENCE[0]),
+    review: oa?.review ?? (open.length ? smallOpenModel(open) : process.env.DOTS_REVIEW_MODEL || REVIEW_PREFERENCE[0]),
+    available: [...(oa?.available ?? []), ...open],
+  };
   g.__dotsResolved = resolved;
   console.log(`[dots] default ${resolved.main} (agent), ${resolved.review} (rule review); ${resolved.available.length} models available`);
   return resolved;
+}
+
+/** Forget the resolved model list (a key was added or removed). */
+export function resetModels() {
+  g.__dotsModels = undefined;
+  g.__dotsResolved = undefined;
+}
+
+/** The API client for a model, the model id that API expects, and whether it keeps conversation state. */
+export function clientFor(model: string): { client: OpenAI; model: string; stateless: boolean } {
+  return isOpenRouterModel(model) ? { client: openrouter(), model: openRouterId(model), stateless: true } : { client: openai(), model, stateless: false };
+}
+
+/** True when any model provider is set up (OpenAI or OpenRouter). */
+export function canThink(): boolean {
+  return hasKey() || Boolean(openRouterKey());
 }
 
 export function models(): Promise<{ main: string; review: string; available: string[] }> {
@@ -118,7 +151,7 @@ export function knownModels(): { main: string; review: string; available: string
 
 /** gpt-5.x / gpt-6 / o-series accept `reasoning`; gpt-4.1 and friends reject it. */
 export function isReasoningModel(model: string): boolean {
-  return /^(gpt-[5-9]|o[1-9])/.test(model) && !/chat/.test(model);
+  return !isOpenRouterModel(model) && /^(gpt-[5-9]|o[1-9])/.test(model) && !/chat/.test(model);
 }
 
 /** OpenAI's GA computer tool needs a recent model; older ones get the page-reading tools only. */

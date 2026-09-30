@@ -7,11 +7,13 @@ import { savePassword as vaultSave } from "@/server/vault";
 import { setSetting } from "@/server/db";
 import { emit } from "@/server/bus";
 import { computerInfo } from "@/server/snapshot";
-import { models, saveApiKey } from "@/server/agent/client";
+import { models, resetModels, saveApiKey } from "@/server/agent/client";
+import { saveOpenRouterKey } from "@/server/agent/openrouter";
+import * as triggers from "@/server/triggers";
 import * as composio from "@/server/composio";
 import * as voice from "@/server/voice";
 import { autoTitle } from "@/server/titles";
-import type { Attachment, Dot, Look, RuleDecision } from "@/lib/types";
+import type { Attachment, Dot, Look, RuleDecision, TriggerApp, TriggerType } from "@/lib/types";
 
 // All mutations go through here; the UI updates from the event stream, not from return values.
 
@@ -33,6 +35,7 @@ export async function updateDot(dotId: string, patch: Partial<Pick<Dot, "name" |
 export async function deleteDot(dotId: string) {
   runtime.stop(dotId);
   await computer.destroy(dotId);
+  await triggers.removeTriggersFor(dotId);
   repo.deleteDot(dotId);
 }
 
@@ -185,6 +188,74 @@ export async function setOpenAIKey(key: string): Promise<string | null> {
   emit({ type: "computer", data: computerInfo() });
   void models().then(() => emit({ type: "computer", data: computerInfo() })).catch(() => {});
   return null;
+}
+
+/** Paste an OpenRouter key in Settings to add open models (empty removes it). */
+export async function setOpenRouterKey(key: string): Promise<string | null> {
+  const err = await saveOpenRouterKey(key.trim());
+  if (err) return err;
+  resetModels();
+  emit({ type: "computer", data: computerInfo() });
+  void models().then(() => emit({ type: "computer", data: computerInfo() })).catch(() => {});
+  return null;
+}
+
+// ---------- triggers (Composio API key) ----------
+
+const errText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+
+/** Paste a Composio API key in Settings to turn on triggers (empty removes it). */
+export async function setComposioKey(key: string): Promise<string | null> {
+  const err = await triggers.saveComposioKey(key.trim());
+  if (!err) emit({ type: "computer", data: computerInfo() });
+  return err;
+}
+
+export async function listTriggerApps(): Promise<{ apps?: TriggerApp[]; error?: string }> {
+  try {
+    return { apps: await triggers.triggerApps() };
+  } catch (err) {
+    return { error: errText(err) };
+  }
+}
+
+export async function connectTriggerApp(toolkit: string): Promise<{ url?: string; error?: string }> {
+  try {
+    return { url: await triggers.connectTriggerApp(toolkit) };
+  } catch (err) {
+    return { error: errText(err) };
+  }
+}
+
+export async function listTriggerTypes(toolkit: string): Promise<{ types?: TriggerType[]; error?: string }> {
+  try {
+    return { types: await triggers.triggerTypes(toolkit) };
+  } catch (err) {
+    return { error: errText(err) };
+  }
+}
+
+export async function addTrigger(dotId: string, toolkit: string, slug: string, config: Record<string, unknown>, instruction: string): Promise<string | null> {
+  if (!instruction.trim()) return "Say what the dot should do when it fires.";
+  try {
+    await triggers.addTrigger(dotId, toolkit, slug, config, instruction.trim());
+    return null;
+  } catch (err) {
+    return errText(err);
+  }
+}
+
+export async function toggleTrigger(triggerId: string, enabled: boolean): Promise<string | null> {
+  try {
+    await triggers.setTriggerEnabled(triggerId, enabled);
+    return null;
+  } catch (err) {
+    return errText(err);
+  }
+}
+
+export async function deleteTrigger(triggerId: string) {
+  await triggers.removeTrigger(triggerId).catch(() => {});
 }
 
 /** Paste an E2B key in Settings for cloud computers (empty removes it). */

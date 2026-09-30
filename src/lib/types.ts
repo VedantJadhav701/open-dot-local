@@ -92,6 +92,27 @@ export type RuleDecision = "allow" | "ask" | "never";
 export type Rule = { id: string; dotId: string | null; action: string; decision: RuleDecision; createdAt: number };
 export type Memory = { id: string; dotId: string; text: string; createdAt: number };
 export type Skill = { id: string; dotId: string; name: string; description: string; body: string; createdAt: number };
+/** A Composio trigger: when something happens in one of the user's apps, a dot runs an instruction. */
+// Picking a trigger: apps connected for triggers, and the events each app offers.
+export type TriggerApp = { slug: string; name: string; connected: boolean };
+export type TriggerField = { name: string; type: string; title: string; description: string; required: boolean; enum?: string[]; default?: unknown };
+export type TriggerType = { slug: string; name: string; description: string; fields: TriggerField[] };
+
+export type AppTrigger = {
+  id: string;
+  dotId: string;
+  composioId: string;
+  slug: string; // e.g. GMAIL_NEW_GMAIL_MESSAGE
+  toolkit: string; // e.g. gmail
+  name: string; // e.g. "New Gmail message"
+  config: Record<string, unknown>;
+  instruction: string;
+  enabled: boolean;
+  createdAt: number;
+  lastFiredAt: number | null;
+  lastError: string | null;
+};
+
 export type Routine = {
   id: string;
   dotId: string;
@@ -109,6 +130,7 @@ export type Snapshot = {
   dots: Dot[];
   messages: Message[];
   routines: Routine[];
+  triggers: AppTrigger[];
   rules: Rule[];
   memories: Memory[];
   skills: Skill[];
@@ -132,6 +154,8 @@ export type ComputerInfo = {
   hasKey: boolean;
   keySource: "env" | "settings" | null;
   cloudKey: "env" | "settings" | null; // E2B key for cloud computers
+  openRouter: "env" | "settings" | null; // OpenRouter key for open models
+  triggersKey: "env" | "settings" | null; // Composio API key for triggers
   sky: boolean; // OpenAI's Sky computer-use runtime is installed on this Mac
   composio: boolean; // COMPOSIO_API_KEY is set
 };
@@ -144,6 +168,8 @@ export type ServerEvent =
   | { type: "message_delta"; id: string; dotId: string; delta: string }
   | { type: "routine"; data: Routine }
   | { type: "routine_deleted"; id: string }
+  | { type: "trigger"; data: AppTrigger }
+  | { type: "trigger_deleted"; id: string }
   | { type: "rule"; data: Rule }
   | { type: "rule_deleted"; id: string }
   | { type: "memory"; data: Memory }

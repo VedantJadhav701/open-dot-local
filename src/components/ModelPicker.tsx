@@ -4,7 +4,11 @@ import { useState } from "react";
 import { Check, ChevronDown, Cpu } from "lucide-react";
 import { useStore } from "@/lib/store";
 
+const OPEN = "openrouter:";
+const label = (id: string) => (id.startsWith(OPEN) ? id.slice(OPEN.length) : id);
+
 function hint(id: string): string | null {
+  if (id.startsWith(OPEN)) return "Open model · OpenRouter";
   if (/-pro\b/.test(id)) return "Strongest · slower";
   if (/-nano\b/.test(id)) return "Fastest · cheapest";
   if (/-mini\b/.test(id)) return "Fast · cheaper";
@@ -31,9 +35,16 @@ export default function ModelPicker({
   const fallback = useStore((s) => s.computer.model);
   const [open, setOpen] = useState(false);
   const current = value ?? fallback;
-  const options: { id: string | null; label: string; sub: string | null }[] = [
-    ...(allowDefault ? [{ id: null, label: "Default", sub: fallback || null }] : []),
-    ...(models.length ? models : fallback ? [fallback] : []).map((id) => ({ id, label: id, sub: hint(id) })),
+  const list = models.length ? models : fallback ? [fallback] : [];
+  const options: { id: string | null; label: string; sub: string | null; group?: string }[] = [
+    ...(allowDefault ? [{ id: null, label: "Default", sub: fallback ? label(fallback) : null }] : []),
+    ...list.map((id, i) => ({
+      id,
+      label: label(id),
+      sub: hint(id),
+      // a heading above the first open model (and above OpenAI's when both are there)
+      group: id.startsWith(OPEN) && !list[i - 1]?.startsWith(OPEN) ? "Open models" : i === 0 && list.some((m) => m.startsWith(OPEN)) ? "OpenAI" : undefined,
+    })),
   ];
 
   return (
@@ -53,7 +64,7 @@ export default function ModelPicker({
       >
         <Cpu className="size-3.5 text-foreground/45" strokeWidth={1.75} />
         {value === null && allowDefault ? <span className="text-foreground/45">Default ·</span> : null}
-        <span className="max-w-40 truncate">{current || "Loading…"}</span>
+        <span className="max-w-40 truncate">{current ? label(current) : "Loading…"}</span>
         <ChevronDown className={`size-3.5 text-foreground/40 transition-transform ${open ? "rotate-180" : ""}`} strokeWidth={1.75} />
       </button>
 
@@ -62,7 +73,12 @@ export default function ModelPicker({
           <div className="eyebrow px-2.5 pt-1.5 pb-1">Model</div>
           {options.map((o) => {
             const selected = o.id === value;
-            return (
+            return [
+              o.group && (
+                <div key={`g-${o.group}`} className="eyebrow px-2.5 pt-2.5 pb-1">
+                  {o.group}
+                </div>
+              ),
               <button
                 key={o.id ?? "__default"}
                 type="button"
@@ -79,10 +95,10 @@ export default function ModelPicker({
                   {o.sub && <span className="block truncate font-mono text-[10px] tracking-wide text-foreground/45 uppercase">{o.sub}</span>}
                 </span>
                 {selected && <Check className="size-3.5 shrink-0 text-foreground" strokeWidth={2} />}
-              </button>
-            );
+              </button>,
+            ];
           })}
-          {!models.length && <div className="px-2.5 py-2 text-caption text-foreground/45">Loading models from your OpenAI key…</div>}
+          {!models.length && <div className="px-2.5 py-2 text-caption text-foreground/45">Loading models…</div>}
         </div>
       )}
     </div>

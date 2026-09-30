@@ -6,6 +6,7 @@ import { Play } from "lucide-react";
 import * as actions from "@/app/actions";
 import { useStore } from "@/lib/store";
 import LookEditor from "./LookEditor";
+import { DotTriggers } from "./Triggers";
 import Dot3DLazy from "./Dot3DLazy";
 import { Empty, PageHeader, RemoveButton, RuleEditor, Section } from "./SettingsKit";
 import type { Dot } from "@/lib/types";
@@ -150,6 +151,10 @@ export default function SetupPane({ dot }: { dot: Dot }) {
           </div>
         </Section>
 
+        <Section eyebrow="Automation" title="Triggers" description={`Wake ${dot.name} when something happens in your apps, like a new email or a Slack mention. It runs in its own chat and still asks before sending anything.`}>
+          <DotTriggers dot={dot} />
+        </Section>
+
         <Section eyebrow="Memory" title="What it knows about you" description={`${dot.name} adds to this as you work together. Remove anything that's wrong.`}>
           <div className="space-y-3">
             {memories.length > 0 ? (
@@ -201,7 +206,7 @@ export default function SetupPane({ dot }: { dot: Dot }) {
           )}
         </Section>
 
-        <Section eyebrow="Danger zone" title={`Delete ${dot.name}`} description="Removes its chat, memory, routines, and computer. This can't be undone.">
+        <Section eyebrow="Danger zone" title={`Delete ${dot.name}`} description="Removes its chat, memory, routines, triggers, and computer. This can't be undone.">
           {confirmDelete ? (
             <div className="flex items-center gap-2">
               <button className="btn bg-destructive text-card hover:opacity-90" onClick={() => start(async () => (await actions.deleteDot(dot.id), router.push("/")))}>

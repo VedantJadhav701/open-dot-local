@@ -2,7 +2,7 @@ import "server-only";
 import type {
   ResponseComputerToolCall, ResponseFunctionToolCall, ResponseInputContent, ResponseInputItem, Response, Tool,
 } from "openai/resources/responses/responses";
-import { isReasoningModel, openai, modelFor, supportsComputerTool } from "./client";
+import { clientFor, isReasoningModel, modelFor, supportsComputerTool } from "./client";
 import { systemPrompt, type Trigger } from "./prompt";
 import { COMPUTER_ENABLED, findTool, setConsult, toolsForDot, type ToolCtx } from "./tools";
 import { review } from "./review";
@@ -11,7 +11,7 @@ import * as computer from "../computer";
 import type { ComputerAction } from "../computer/browser";
 import { emit } from "../bus";
 import * as composio from "../composio";
-import type { Attachment, CardData, Dot, Routine } from "@/lib/types";
+import type { AppTrigger, Attachment, CardData, Dot, Routine } from "@/lib/types";
 import * as files from "../files";
 
 type Call = ResponseFunctionToolCall | ResponseComputerToolCall;
@@ -91,6 +91,17 @@ export function runRoutine(routine: Routine) {
   const conv = repo.workConversation(dot.id, "chat", `routine:${routine.id}`, `Routine · ${routine.name}`);
   repo.addMessage({ dotId: dot.id, role: "system", text: `Routine “${routine.name}” started`, from: `routine:${routine.name}`, conversationId: conv });
   state(dot.id).inbox.push({ text: `[Routine: ${routine.name}] ${routine.instruction}`, trigger: { kind: "routine", name: routine.name }, conversationId: conv });
+  void pump(dot.id);
+}
+
+/** A Composio trigger fired: run its dot on the instruction, in the trigger's own chat, from a fresh context. */
+export function runTrigger(t: AppTrigger, event: Record<string, unknown>) {
+  const dot = repo.getDot(t.dotId);
+  if (!dot || dot.status === "paused" || !t.enabled) return;
+  const conv = repo.workConversation(dot.id, "chat", `trigger:${t.id}`, `Trigger · ${t.name}`);
+  repo.addMessage({ dotId: dot.id, role: "system", text: `Trigger “${t.name}” fired`, from: `trigger:${t.name}`, conversationId: conv });
+  const data = JSON.stringify(event, null, 1).slice(0, 6000);
+  state(dot.id).inbox.push({ text: `[Trigger: ${t.name}] ${t.instruction}\n\nWhat happened (${t.toolkit} event data):\n${data}`, trigger: { kind: "trigger", name: t.name }, conversationId: conv });
   void pump(dot.id);
 }
 
@@ -236,12 +247,20 @@ async function turn(dotId: string, text: string, trigger: Trigger, signal: Abort
   let { thread } = repo.getThread(dotId);
   const pending = parsePending(repo.getThread(dotId).pending);
   const input: ResponseInputItem[] = [];
+  // Trigger runs start clean for each event, so a busy inbox doesn't pile up context. An approval
+  // still open from the previous event expires, the same as when the user sends a new message.
+  const fresh = trigger.kind === "trigger";
   if (pending) {
     const closed = closePending(dot, pending);
-    if (closed) input.push(...closed);
+    if (closed && !fresh) input.push(...closed);
     else thread = null;
   }
-  if (!thread) input.unshift(...rebuildContext(dotId, text));
+  if (fresh) {
+    repo.resetThread(conversationId);
+    thread = null;
+  }
+  const { stateless } = clientFor(await modelFor(dot.model));
+  if (!fresh && (stateless ? !repo.getHistory(dotId).length : !thread)) input.unshift(...rebuildContext(dotId, text));
   input.push(userInput(text, attachments));
   await drive(dot, thread, input, trigger, signal);
 }
@@ -253,14 +272,14 @@ async function drive(dot: Dot, prevId: string | null, input: ResponseInputItem[]
     try {
       resp = await respond(dot, prevId, input, trigger, signal);
     } catch (err) {
-      if (!prevId || signal.aborted || !/previous|not found|No tool output/i.test(String(err))) throw err;
+      if (!prevId || signal.aborted || clientFor(await modelFor(dot.model)).stateless || !/previous|not found|No tool output/i.test(String(err))) throw err;
       // The server-side thread is gone or broken: rebuild from our transcript and carry on.
       const userText = input.filter((i) => "role" in i && i.role === "user").map((i) => ("content" in i ? String(i.content) : "")).join("\n");
       input = [...rebuildContext(dot.id, userText), { role: "user", content: userText || "Continue." }];
       prevId = null;
       resp = await respond(dot, null, input, trigger, signal);
     }
-    repo.setThread(dot.id, resp.id, null);
+    repo.setThread(dot.id, clientFor(await modelFor(dot.model)).stateless ? null : resp.id, null);
 
     const calls = resp.output.filter((o): o is Call => o.type === "function_call" || o.type === "computer_call");
     if (!calls.length) return;
@@ -274,27 +293,33 @@ async function drive(dot: Dot, prevId: string | null, input: ResponseInputItem[]
 
 /** Stream one model response, mirroring text into the transcript as it arrives. */
 async function respond(dot: Dot, prevId: string | null, input: ResponseInputItem[], trigger: Trigger, signal: AbortSignal): Promise<Response> {
+  const appModel = await modelFor(dot.model);
+  const { client, model, stateless } = clientFor(appModel);
   const tools: Tool[] = [
-    ...toolsForDot(dot).map((t): Tool => ({ type: "function", name: t.name, description: t.description, parameters: t.parameters, strict: t.strict !== false })),
-    { type: "web_search" },
+    ...toolsForDot(dot).map((t): Tool => ({ type: "function", name: t.name, description: t.description, parameters: t.parameters, strict: !stateless && t.strict !== false })),
+    // OpenRouter's server-side search: the model decides when to search, same as OpenAI's web_search.
+    stateless ? ({ type: "openrouter:web_search" } as unknown as Tool) : { type: "web_search" },
   ];
-  const model = await modelFor(dot.model);
-  if (COMPUTER_ENABLED && supportsComputerTool(model)) tools.push({ type: "computer" } as Tool);
+  if (!stateless && COMPUTER_ENABLED && supportsComputerTool(model)) tools.push({ type: "computer" } as Tool);
 
+  // Stateless providers get the whole conversation every time; the app keeps it (trimmed) per chat.
+  const history = stateless ? (repo.getHistory(dot.id) as ResponseInputItem[]) : [];
   repo.setActivity(dot.id, "Thinking");
-  const stream = await openai().responses.create(
-    {
-      model,
-      instructions: systemPrompt(dot, trigger),
-      input,
-      previous_response_id: prevId ?? undefined,
-      tools,
-      ...(isReasoningModel(model) ? { reasoning: { effort: "medium" as const } } : {}),
-      truncation: "auto",
-      parallel_tool_calls: false,
-      store: true,
-      stream: true,
-    },
+  const stream = await client.responses.create(
+    stateless
+      ? { model, instructions: systemPrompt(dot, trigger), input: [...history, ...input], tools, parallel_tool_calls: false, store: false, stream: true }
+      : {
+          model,
+          instructions: systemPrompt(dot, trigger),
+          input,
+          previous_response_id: prevId ?? undefined,
+          tools,
+          ...(isReasoningModel(model) ? { reasoning: { effort: "medium" as const } } : {}),
+          truncation: "auto",
+          parallel_tool_calls: false,
+          store: true,
+          stream: true,
+        },
     { signal },
   );
 
@@ -304,7 +329,7 @@ async function respond(dot: Dot, prevId: string | null, input: ResponseInputItem
     for await (const ev of stream) {
       switch (ev.type) {
         case "response.output_item.added":
-          if (ev.item.type === "web_search_call") repo.setActivity(dot.id, "Searching the web");
+          if (String(ev.item.type).includes("web_search")) repo.setActivity(dot.id, "Searching the web");
           else if (ev.item.type === "computer_call") repo.setActivity(dot.id, "Using its computer");
           else if (ev.item.type === "message") repo.setActivity(dot.id, "Writing");
           break;
@@ -322,7 +347,7 @@ async function respond(dot: Dot, prevId: string | null, input: ResponseInputItem
           if (ev.item.type === "message") {
             const d = drafts.get(ev.item.id);
             if (d) repo.updateMessage(d.id, { text: d.text });
-          } else if (ev.item.type === "web_search_call") {
+          } else if (String(ev.item.type).includes("web_search")) {
             const action = (ev.item as { action?: { query?: string } }).action;
             activity(dot.id, "Searched the web", action?.query);
           }
@@ -341,7 +366,34 @@ async function respond(dot: Dot, prevId: string | null, input: ResponseInputItem
     for (const d of drafts.values()) repo.updateMessage(d.id, { text: d.text || "…" });
   }
   if (!final) throw new Error("The model stream ended unexpectedly");
+  if (stateless) repo.setHistory(dot.id, trimHistory([...history, ...input, ...replayable(final.output)]));
   return final;
+}
+
+/** The parts of a response worth sending back next turn: what the model said and the tools it called. */
+function replayable(output: Response["output"]): ResponseInputItem[] {
+  const items: ResponseInputItem[] = [];
+  for (const o of output) {
+    if (o.type === "message") {
+      const text = o.content.map((c) => ("text" in c ? c.text : "")).join("");
+      if (text) items.push({ role: "assistant", content: text });
+    } else if (o.type === "function_call") {
+      items.push({ type: "function_call", call_id: o.call_id, name: o.name, arguments: o.arguments });
+    }
+  }
+  return items;
+}
+
+/** Keep the replayed history bounded: drop the oldest turns, always cutting at a user message. */
+function trimHistory(items: ResponseInputItem[], maxItems = 80, maxChars = 160_000): ResponseInputItem[] {
+  const size = (list: ResponseInputItem[]) => JSON.stringify(list).length;
+  let start = 0;
+  while (items.length - start > maxItems || size(items.slice(start)) > maxChars) {
+    const next = items.findIndex((it, i) => i > start && "role" in it && it.role === "user");
+    if (next < 0) break;
+    start = next;
+  }
+  return items.slice(start);
 }
 
 /** Execute tool calls in order. Returns true if the run paused to wait for the user. */
@@ -488,13 +540,14 @@ setConsult(async (target, message, from, _depth, signal) => {
   if (!channelId) repo.addMessage({ dotId: target.id, role: "user", text: message, from: `dot:${from.name}` });
   repo.setActivity(target.id, `Helping ${from.name}`);
   try {
-    const res = await openai().responses.create(
+    const { client, model, stateless } = clientFor(await modelFor(target.model));
+    const res = await client.responses.create(
       {
-        model: await modelFor(target.model),
+        model,
         instructions: systemPrompt(target, { kind: "dot", from: from.name }),
         input: [...rebuildContext(target.id, message).slice(-12), { role: "user", content: `${from.name} asks: ${message}` }],
-        tools: [{ type: "web_search" }],
-        ...(isReasoningModel(await modelFor(target.model)) ? { reasoning: { effort: "low" as const } } : {}),
+        tools: [stateless ? ({ type: "openrouter:web_search" } as unknown as Tool) : { type: "web_search" }],
+        ...(stateless ? { store: false } : isReasoningModel(model) ? { reasoning: { effort: "low" as const } } : {}),
       },
       { signal },
     );

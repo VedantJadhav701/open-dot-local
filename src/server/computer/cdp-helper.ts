@@ -114,6 +114,12 @@ elif cmd == "open":
     print(json.dumps(info()))
 elif cmd == "text":
     print(json.dumps(evaluate("({url: location.href, title: document.title, text: document.body ? document.body.innerText : ''})") or {}))
+elif cmd == "js":
+    path = sys.argv[2]
+    with open(path) as f:
+        code = f.read()
+    os.remove(path)
+    print(json.dumps(evaluate(code) or {}))
 elif cmd == "fill":
     path = sys.argv[2]
     with open(path) as f:

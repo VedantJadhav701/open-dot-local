@@ -1,6 +1,7 @@
 import "server-only";
 import * as repo from "../repo";
 import * as computer from "../computer";
+import { RISKY_CLICK } from "../computer/dom-actions";
 import { runOnUserComputer } from "../computer/shell";
 import { credentialFor } from "../vault";
 import { emit } from "../bus";
@@ -103,6 +104,25 @@ export const TOOLS: ToolDef[] = [
     description: "Get the visible text of the page currently open in your browser.",
     parameters: obj({}),
     execute: (_a, ctx) => computer.readPage(ctx.dot.id),
+  },
+  {
+    name: "click",
+    label: "Using its computer",
+    description:
+      "Click something on the page open in your browser by its visible text (a button, link, tab, option, checkbox or label), e.g. \"Continue\" or \"Row F seat 12\". Read the page first so you use the exact text.",
+    parameters: obj({ text: str("The visible text of what to click") }),
+    describe: (a) => `click "${s(a.text)}" in its browser`,
+    defaultDecision: (_c, a) => (RISKY_CLICK.test(s(a.text)) ? "ask" : "allow"),
+    execute: (a, ctx) => computer.clickText(ctx.dot.id, s(a.text)),
+  },
+  {
+    name: "type_text",
+    label: "Using its computer",
+    description: "Type into a field on the page open in your browser, found by its label, placeholder or name. Set submit to press Enter afterwards. Never use it for passwords (use sign_in).",
+    parameters: obj({ field: str("Label, placeholder or name of the field"), text: str("What to type"), submit: { type: "boolean", description: "Press Enter after typing" } }, ["field", "text", "submit"]),
+    describe: (a) => `type "${s(a.text).slice(0, 60)}" into "${s(a.field)}" in its browser`,
+    defaultDecision: () => "allow",
+    execute: (a, ctx) => computer.typeText(ctx.dot.id, s(a.field), s(a.text), Boolean(a.submit)),
   },
   {
     name: "sign_in",

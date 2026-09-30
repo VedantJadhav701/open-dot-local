@@ -5,6 +5,7 @@ import { emit } from "../bus";
 import { getSetting, setSetting } from "../db";
 import { seal, unseal } from "../vault";
 import { CDP_HELPER, CDP_HELPER_PATH } from "./cdp-helper";
+import { clickScript, typeScript } from "./dom-actions";
 import type { ComputerAction } from "./browser";
 
 // Cloud computers: each dot gets its own E2B desktop sandbox (Linux + Chrome + a live stream).
@@ -186,6 +187,29 @@ export async function fillLogin(dotId: string, username: string, password: strin
   const n = Number(r.filled ?? 0);
   if (!n) return "No visible login fields found on this page. Navigate to the sign-in form first.";
   return `Filled ${n === 2 ? "username and password" : "the only login field visible (it may be a multi-step form; continue and call again)"} for ${username}. Submit the form to continue (the password itself is hidden from you).`;
+}
+
+async function runScript(dotId: string, code: string): Promise<Record<string, unknown>> {
+  const { sb } = await box(dotId);
+  const tmp = `/tmp/.dots-${crypto.randomUUID()}.js`;
+  await sb.files.write(tmp, code);
+  return helper(dotId, `js ${tmp}`);
+}
+
+export async function clickText(dotId: string, text: string): Promise<string> {
+  const r = await runScript(dotId, clickScript(text));
+  if (!r.ok) return String(r.error ?? "Couldn't click that.");
+  await new Promise((res) => setTimeout(res, 800));
+  const info = await helper(dotId, "text");
+  await screenshot(dotId);
+  return `Clicked "${String(r.label || text)}". Now on ${info.url ?? ""} — "${info.title ?? ""}". Read the page to see what changed.`;
+}
+
+export async function typeText(dotId: string, field: string, value: string, submit: boolean): Promise<string> {
+  const r = await runScript(dotId, typeScript(field, value, submit));
+  if (!r.ok) return String(r.error ?? "Couldn't find that field.");
+  await screenshot(dotId);
+  return submit ? `Typed into "${field}" and submitted.` : `Typed into "${field}".`;
 }
 
 // ---------- screen (OpenAI computer-use actions) ----------

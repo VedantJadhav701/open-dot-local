@@ -4,6 +4,7 @@ import fs from "node:fs";
 import { chromium, type BrowserContext, type CDPSession, type Page } from "playwright";
 import { DATA_DIR } from "../db";
 import { emit } from "../bus";
+import { clickScript, typeScript } from "./dom-actions";
 
 // Each dot gets its own persistent Chrome profile, so logins survive restarts. It always runs headless:
 // the Computer tab streams its screen and forwards your mouse and keyboard when you take over.
@@ -239,6 +240,40 @@ export async function doAction(dotId: string, action: ComputerAction): Promise<v
       break;
   }
   await p.waitForTimeout(action.type === "wait" ? 0 : 400);
+}
+
+/** Click by visible text: Playwright's own locators first (real mouse events), then an in-page search. */
+export async function clickText(dotId: string, text: string): Promise<string> {
+  const p = await page(dotId, false);
+  const name = new RegExp(text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "i");
+  const target = p.getByRole("button", { name }).or(p.getByRole("link", { name })).or(p.getByText(text, { exact: false }));
+  let label = text;
+  try {
+    await target.first().click({ timeout: 4000 });
+  } catch {
+    const r = (await p.evaluate(clickScript(text))) as { ok: boolean; label?: string; error?: string };
+    if (!r.ok) return r.error ?? "Couldn't click that.";
+    label = r.label || text;
+  }
+  await p.waitForTimeout(700);
+  await screenshot(dotId);
+  return `Clicked "${label}". Now on ${p.url()} — "${await p.title()}". Read the page to see what changed.`;
+}
+
+/** Type into the field whose label, placeholder or name matches `field`. */
+export async function typeText(dotId: string, field: string, value: string, submit: boolean): Promise<string> {
+  const p = await page(dotId, false);
+  const target = p.getByLabel(field, { exact: false }).or(p.getByPlaceholder(field, { exact: false }));
+  try {
+    await target.first().fill(value, { timeout: 4000 });
+    if (submit) await target.first().press("Enter");
+  } catch {
+    const r = (await p.evaluate(typeScript(field, value, submit))) as { ok: boolean; error?: string };
+    if (!r.ok) return r.error ?? "Couldn't find that field.";
+  }
+  await p.waitForTimeout(submit ? 1200 : 300);
+  await screenshot(dotId);
+  return submit ? `Typed into "${field}" and submitted. Now on ${p.url()}.` : `Typed into "${field}".`;
 }
 
 /**

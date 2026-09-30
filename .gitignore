@@ -49,3 +49,5 @@ next-env.d.ts
 # desktop builds
 /dist
 /.desktop
+/videos
+.gstack/

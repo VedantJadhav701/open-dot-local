@@ -18,8 +18,8 @@ export type State = Snapshot & {
 };
 
 const EMPTY: State = {
-  dots: [], messages: [], routines: [], rules: [], memories: [], skills: [], passwords: [],
-  computer: { mode: "local", docker: false, image: "", model: "", models: [], computerTool: "", hasKey: true, keySource: null, cloudKey: null, sky: false, composio: false },
+  dots: [], messages: [], routines: [], triggers: [], rules: [], memories: [], skills: [], passwords: [],
+  computer: { mode: "local", docker: false, image: "", model: "", models: [], computerTool: "", hasKey: true, keySource: null, cloudKey: null, openRouter: null, triggersKey: null, sky: false, composio: false },
   apps: [],
   channels: [],
   conversations: [],
@@ -102,6 +102,10 @@ function apply(ev: ServerEvent) {
       return set({ routines: upsert(state.routines, ev.data) });
     case "routine_deleted":
       return set({ routines: without(state.routines, ev.id) });
+    case "trigger":
+      return set({ triggers: upsert(state.triggers, ev.data) });
+    case "trigger_deleted":
+      return set({ triggers: without(state.triggers, ev.id) });
     case "rule":
       return set({ rules: upsert(state.rules, ev.data) });
     case "rule_deleted":

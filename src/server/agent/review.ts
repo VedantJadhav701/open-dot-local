@@ -1,5 +1,5 @@
 import "server-only";
-import { openai, models } from "./client";
+import { clientFor, models } from "./client";
 import * as repo from "../repo";
 import type { Rule, RuleDecision } from "@/lib/types";
 
@@ -15,8 +15,10 @@ export async function review(dotId: string, action: string, fallback: RuleDecisi
 
   const list = rules.map((r, i) => `${i + 1}. When the dot wants to ${r.action} → ${r.decision === "allow" ? "allow automatically" : r.decision === "ask" ? "ask first" : "never allow"}`).join("\n");
   try {
-    const res = await openai().responses.create({
-      model: (await models()).review,
+    const { client, model, stateless } = clientFor((await models()).review);
+    const res = await client.responses.create({
+      model,
+      ...(stateless ? { store: false } : {}),
       instructions:
         "You gate actions of a personal AI agent. Decide which of the user's rules (if any) apply to the pending action. " +
         "A rule applies only if the action clearly falls under it. Return the numbers of every applying rule; return an empty list if none apply.",

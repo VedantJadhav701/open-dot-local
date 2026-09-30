@@ -4,7 +4,7 @@ import { emit } from "./bus";
 import { Cron } from "croner";
 import { normalizeLook } from "@/lib/look";
 import type {
-  Attachment, CardData, Channel, Conversation, Dot, DotStatus, Look, Memory, Message, MessageRole, PasswordEntry, Routine, Rule, RuleDecision, Skill,
+  AppTrigger, Attachment, CardData, Channel, Conversation, Dot, DotStatus, Look, Memory, Message, MessageRole, PasswordEntry, Routine, Rule, RuleDecision, Skill,
 } from "@/lib/types";
 
 type Row = Record<string, unknown>;
@@ -101,7 +101,7 @@ export function setActivity(dotId: string, label: string | null) {
 
 export function deleteDot(dotId: string) {
   const d = db();
-  for (const t of ["messages", "memories", "skills", "routines", "rules", "conversations"]) d.prepare(`DELETE FROM ${t} WHERE dot_id = ?`).run(dotId);
+  for (const t of ["messages", "memories", "skills", "routines", "triggers", "rules", "conversations"]) d.prepare(`DELETE FROM ${t} WHERE dot_id = ?`).run(dotId);
   d.prepare("DELETE FROM dots WHERE id = ?").run(dotId);
   emit({ type: "dot_deleted", id: dotId });
 }
@@ -211,6 +211,20 @@ export function getThread(dotId: string): { thread: string | null; pending: stri
 
 export function setThread(dotId: string, thread: string | null, pending: string | null) {
   db().prepare("UPDATE conversations SET thread = ?, pending = ? WHERE id = ?").run(thread, pending, currentConversation(dotId));
+}
+
+/** Model-facing history of the conversation the dot is working in (for stateless providers). */
+export function getHistory(dotId: string): unknown[] {
+  const r = db().prepare("SELECT history FROM conversations WHERE id = ?").get(currentConversation(dotId)) as Row | undefined;
+  try {
+    return r?.history ? (JSON.parse(r.history as string) as unknown[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+export function setHistory(dotId: string, items: unknown[] | null) {
+  db().prepare("UPDATE conversations SET history = ? WHERE id = ?").run(items ? JSON.stringify(items) : null, currentConversation(dotId));
 }
 
 /** The dot's cloud computer (sandbox id), if it has one. */
@@ -473,6 +487,61 @@ export function updateRoutine(routineId: string, patch: { enabled?: boolean; las
 export function deleteRoutine(routineId: string) {
   db().prepare("DELETE FROM routines WHERE id = ?").run(routineId);
   emit({ type: "routine_deleted", id: routineId });
+}
+
+// ---------- triggers (Composio events that wake a dot) ----------
+
+const toTrigger = (r: Row): AppTrigger => ({
+  id: r.id as string, dotId: r.dot_id as string, composioId: r.composio_id as string, slug: r.slug as string,
+  toolkit: r.toolkit as string, name: r.name as string, config: JSON.parse(r.config as string) as Record<string, unknown>,
+  instruction: r.instruction as string, enabled: r.enabled === 1, createdAt: r.created_at as number,
+  lastFiredAt: (r.last_fired_at as number) ?? null, lastError: (r.last_error as string) ?? null,
+});
+
+export function listTriggers(dotId?: string): AppTrigger[] {
+  const q = dotId
+    ? db().prepare("SELECT * FROM triggers WHERE dot_id = ? ORDER BY created_at").all(dotId)
+    : db().prepare("SELECT * FROM triggers ORDER BY created_at").all();
+  return q.map(toTrigger);
+}
+
+export function getTrigger(triggerId: string): AppTrigger | null {
+  const r = db().prepare("SELECT * FROM triggers WHERE id = ?").get(triggerId);
+  return r ? toTrigger(r) : null;
+}
+
+export function triggerByComposioId(composioId: string): AppTrigger | null {
+  const r = db().prepare("SELECT * FROM triggers WHERE composio_id = ?").get(composioId);
+  return r ? toTrigger(r) : null;
+}
+
+export function addTrigger(input: { dotId: string; composioId: string; slug: string; toolkit: string; name: string; config: Record<string, unknown>; instruction: string }): AppTrigger {
+  const triggerId = id("trg");
+  db()
+    .prepare("INSERT INTO triggers (id, dot_id, composio_id, slug, toolkit, name, config, instruction, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    .run(triggerId, input.dotId, input.composioId, input.slug, input.toolkit, input.name, JSON.stringify(input.config), input.instruction, now());
+  const t = getTrigger(triggerId)!;
+  emit({ type: "trigger", data: t });
+  return t;
+}
+
+export function updateTrigger(triggerId: string, patch: { enabled?: boolean; lastFiredAt?: number; lastError?: string | null }): AppTrigger | null {
+  if (patch.enabled !== undefined) db().prepare("UPDATE triggers SET enabled = ? WHERE id = ?").run(patch.enabled ? 1 : 0, triggerId);
+  if (patch.lastFiredAt !== undefined) db().prepare("UPDATE triggers SET last_fired_at = ? WHERE id = ?").run(patch.lastFiredAt, triggerId);
+  if (patch.lastError !== undefined) db().prepare("UPDATE triggers SET last_error = ? WHERE id = ?").run(patch.lastError, triggerId);
+  const t = getTrigger(triggerId);
+  if (t) emit({ type: "trigger", data: t });
+  return t;
+}
+
+export function deleteTrigger(triggerId: string) {
+  db().prepare("DELETE FROM triggers WHERE id = ?").run(triggerId);
+  emit({ type: "trigger_deleted", id: triggerId });
+}
+
+/** Start a conversation's next run from a clean model context (the chat itself keeps its messages). */
+export function resetThread(convId: string) {
+  db().prepare("UPDATE conversations SET thread = NULL, pending = NULL, history = NULL WHERE id = ?").run(convId);
 }
 
 // ---------- passwords (secret column is encrypted; see vault.ts) ----------

@@ -89,6 +89,9 @@ export async function listFiles(dotId: string): Promise<FileEntry[]> {
 export const openUrl = (dotId: string, url: string) => (isCloud(dotId) ? cloud.openUrl(dotId, url) : browser.openUrl(dotId, url));
 export const readPage = (dotId: string) => (isCloud(dotId) ? cloud.readPage(dotId) : browser.readPage(dotId));
 export const fillLogin = (dotId: string, u: string, p: string) => (isCloud(dotId) ? cloud.fillLogin(dotId, u, p) : browser.fillLogin(dotId, u, p));
+export const clickText = (dotId: string, text: string) => (isCloud(dotId) ? cloud.clickText(dotId, text) : browser.clickText(dotId, text));
+export const typeText = (dotId: string, field: string, value: string, submit: boolean) =>
+  isCloud(dotId) ? cloud.typeText(dotId, field, value, submit) : browser.typeText(dotId, field, value, submit);
 export const doAction = (dotId: string, a: ComputerAction) => (isCloud(dotId) ? cloud.doAction(dotId, a) : browser.doAction(dotId, a));
 export const screenshot = (dotId: string) => (isCloud(dotId) ? cloud.screenshot(dotId) : browser.screenshot(dotId));
 export const lastScreenshot = (dotId: string) => (isCloud(dotId) ? cloud.lastScreenshot(dotId) : browser.lastScreenshot(dotId));
