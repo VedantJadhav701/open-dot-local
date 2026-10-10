@@ -3,9 +3,7 @@ import { OllamaProvider } from "./ollama";
 import type { LLMProvider, ModelInfo } from "./types";
 import { getSetting, setSetting } from "../db";
 import { DEFAULT_MODEL } from "../models/types";
-
-const DEFAULT_MAIN_MODELS = [DEFAULT_MODEL];
-const DEFAULT_REVIEW_MODELS = [DEFAULT_MODEL];
+import { MODEL_CATALOG, isOfficialModel } from "@/lib/model-catalog";
 
 let activeProvider: LLMProvider = new OllamaProvider();
 
@@ -46,86 +44,67 @@ export async function isOllamaConnected(): Promise<boolean> {
   return activeProvider.health();
 }
 
+// ---------- which models the app is allowed to use ----------
+
+/** Cloud Boost model ids, only while the user has saved a key. */
+function cloudModelIds(): string[] {
+  const { hasCloudBoostKey } = require("../vault");
+  if (!hasCloudBoostKey()) return [];
+  const cloudModel = getSetting("cloud_boost_model") || "moonshotai/kimi-k3";
+  return [cloudModel, "meta/muse-glimmer-30b"];
+}
+
+/** Original (not fine-tuned, not custom) model from the official Ollama library. */
 export function isOriginalStandardModel(modelId: string): boolean {
-  if (!modelId) return false;
-  const lower = modelId.toLowerCase();
-  if (lower.includes("embed")) return false;
-  if (
-    lower.startsWith("vidya") ||
-    lower.startsWith("promethicc") ||
-    lower.startsWith("telco") ||
-    lower.startsWith("win_action") ||
-    lower.startsWith("action_model")
-  ) {
-    return false;
-  }
-  return true;
+  return isOfficialModel(modelId);
+}
+
+/** An original local model, or a Cloud Boost model the user switched on. */
+export function isAllowedModel(modelId: string): boolean {
+  return isOfficialModel(modelId) || cloudModelIds().includes(modelId);
 }
 
 export async function listAvailableModels(): Promise<ModelInfo[]> {
   const isHealthy = await isOllamaConnected();
   const rawModels = isHealthy ? await activeProvider.listModels() : [];
-  const models = rawModels.filter((m) => isOriginalStandardModel(m.id));
+  const models = rawModels.filter((m) => isOfficialModel(m.id));
 
-  const { hasCloudBoostKey } = require("../vault");
-  if (hasCloudBoostKey()) {
-    const cloudModel = getSetting("cloud_boost_model") || "moonshotai/kimi-k3";
-    const cloudModels = [cloudModel, "meta/muse-glimmer-30b"];
-    for (const cm of cloudModels) {
-      if (!models.some((m) => m.id === cm)) {
-        models.push({ id: cm, name: `${cm} (Cloud)` });
-      }
+  for (const cm of cloudModelIds()) {
+    if (!models.some((m) => m.id === cm)) {
+      models.push({ id: cm, name: `${cm} (Cloud)` });
     }
   }
 
   return models;
 }
 
+/**
+ * Pick the model to use. Only original local models (and Cloud Boost models the user turned on) are
+ * considered. A fine-tuned or custom model, even a saved one, is never used. Without a good match this
+ * falls back to the best installed original model, never to a cloud model, and never to a custom one.
+ */
 export function pickBestAvailableModel(available: string[], preferredTarget?: string): string {
-  if (!available || available.length === 0) {
-    return preferredTarget || DEFAULT_MODEL;
+  const cloud = cloudModelIds();
+  const pool = (available ?? []).filter((m) => isAllowedModel(m));
+
+  if (pool.length === 0) {
+    return preferredTarget && isAllowedModel(preferredTarget) ? preferredTarget : DEFAULT_MODEL;
   }
 
-  const pool = available.filter((m) => isOriginalStandardModel(m));
-  const candidatePool = pool.length > 0 ? pool : available;
-
-  if (preferredTarget && candidatePool.includes(preferredTarget)) {
-    return preferredTarget;
-  }
+  if (preferredTarget && pool.includes(preferredTarget)) return preferredTarget;
 
   const defaultSaved = getSetting("default_model");
-  if (defaultSaved && candidatePool.includes(defaultSaved)) {
-    return defaultSaved;
+  if (defaultSaved && pool.includes(defaultSaved)) return defaultSaved;
+
+  const local = pool.filter((m) => !cloud.includes(m));
+  const order = [DEFAULT_MODEL, ...MODEL_CATALOG.map((m) => m.id)];
+  for (const id of order) {
+    if (local.includes(id)) return id;
   }
-
-  const preferredPatterns = [
-    /qwen3:4b-instruct-2507/i,
-    /qwen3:4b/i,
-    /qwen3/i,
-    /ornith/i,
-    /4b/i,
-    /7b/i,
-    /8b/i,
-    /14b/i,
-    /27b/i,
-    /32b/i,
-    /70b/i,
-    /qwen2\.5/i,
-    /gemma/i,
-    /llama/i,
-    /vero/i,
-  ];
-
-  for (const pattern of preferredPatterns) {
-    const found = candidatePool.find((m) => pattern.test(m));
-    if (found) return found;
-  }
-
-  const nonTiny = candidatePool.find((m) => !/1b|1\.5b|1\.7b|2b|nano|micro|tiny/i.test(m));
-  if (nonTiny) return nonTiny;
-
-  return candidatePool[0];
+  return local[0] ?? preferredTarget ?? DEFAULT_MODEL;
 }
+
+// ---------- cached model list (the UI reads this synchronously) ----------
 
 let lastResolved: { main: string; review: string; available: string[] } = {
   main: DEFAULT_MODEL,
@@ -133,57 +112,65 @@ let lastResolved: { main: string; review: string; available: string[] } = {
   available: [],
 };
 
+let lastRefreshAt = 0;
+let refreshing = false;
+
+/** Re-read Ollama in the background when the cached list is stale, so the first snapshot is not empty forever. */
+function refreshIfStale(maxAgeMs = 4000) {
+  if (refreshing || Date.now() - lastRefreshAt < maxAgeMs) return;
+  refreshing = true;
+  void resolveModels()
+    .catch(() => {})
+    .finally(() => {
+      refreshing = false;
+    });
+}
+
 export function getResolvedSync(): { main: string; review: string; available: string[] } {
-  const { hasCloudBoostKey } = require("../vault");
-  const cloudModel = getSetting("cloud_boost_model") || "moonshotai/kimi-k3";
+  refreshIfStale();
   const available = [...lastResolved.available];
-  const cloudModels = [cloudModel, "meta/muse-glimmer-30b"];
-  if (hasCloudBoostKey()) {
-    for (const cm of cloudModels) {
-      if (!available.includes(cm)) {
-        available.push(cm);
-      }
-    }
+  for (const cm of cloudModelIds()) {
+    if (!available.includes(cm)) available.push(cm);
   }
   return { ...lastResolved, available };
 }
 
+function usableSaved(key: string): string | null {
+  const saved = getSetting(key);
+  return saved && isAllowedModel(saved) ? saved : null;
+}
+
 export async function resolveModels(): Promise<{ main: string; review: string; available: string[] }> {
   const models = await listAvailableModels();
-  const modelIds = models.filter((m) => !m.id.toLowerCase().includes("embed")).map((m) => m.id);
+  const modelIds = models.map((m) => m.id);
 
   const envMain = process.env.DOTS_MODEL;
   const envReview = process.env.DOTS_REVIEW_MODEL;
 
-  const main =
-    envMain ||
-    getSetting("default_model") ||
-    pickBestAvailableModel(modelIds, DEFAULT_MODEL);
+  const savedMain = usableSaved("default_model");
+  const main = envMain || pickBestAvailableModel(modelIds, savedMain ?? DEFAULT_MODEL);
 
-  const review =
-    envReview ||
-    getSetting("review_model") ||
-    main;
+  const savedReview = usableSaved("review_model");
+  const review = envReview || (savedReview ? pickBestAvailableModel(modelIds, savedReview) : main);
 
   lastResolved = { main, review, available: modelIds };
+  lastRefreshAt = Date.now();
 
   return lastResolved;
 }
 
 export async function activeModel(override?: string | null): Promise<string> {
   const res = await resolveModels();
-  const available = res.available;
   const target = override || getSetting("default_model") || DEFAULT_MODEL;
 
-  return pickBestAvailableModel(available, target);
+  return pickBestAvailableModel(res.available, target);
 }
 
 export async function activeReviewModel(): Promise<string> {
   const res = await resolveModels();
-  const available = res.available;
-  const target = getSetting("review_model") || DEFAULT_MODEL;
+  const target = getSetting("review_model") || res.main || DEFAULT_MODEL;
 
-  return pickBestAvailableModel(available, target);
+  return pickBestAvailableModel(res.available, target);
 }
 
 export function setDefaultModel(modelId: string) {

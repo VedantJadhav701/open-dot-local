@@ -1,56 +1,84 @@
 import "server-only";
 import os from "node:os";
+import fs from "node:fs";
 import { spawnSync } from "node:child_process";
 import { dockerAvailable } from "../computer/shell";
 import { isOllamaConnected } from "../llm";
 import type { CapabilityProfile } from "./types";
 
-function command(command: string, args: string[]): string {
+function run(command: string, args: string[], timeout = 3500): string {
   try {
-    const result = spawnSync(command, args, { encoding: "utf8", timeout: 3500, windowsHide: true });
-    return result.status === 0 ? result.stdout.trim() : "";
+    const result = spawnSync(command, args, { encoding: "utf8", timeout, windowsHide: true });
+    return result.status === 0 ? String(result.stdout ?? "").trim() : "";
   } catch {
     return "";
   }
 }
 
-function numberFrom(value: string): number | null {
-  const match = value.replace(/,/g, "").match(/[0-9]+(?:\.[0-9]+)?/);
-  return match ? Number(match[0]) : null;
+type Gpu = { gpu: string | null; vramGB: number | null; unifiedMemory: boolean };
+
+function nvidia(): Gpu | null {
+  const bins =
+    process.platform === "win32"
+      ? ["nvidia-smi", "C:\\Windows\\System32\\nvidia-smi.exe", "C:\\Program Files\\NVIDIA Corporation\\NVSMI\\nvidia-smi.exe"]
+      : ["nvidia-smi"];
+  for (const bin of bins) {
+    const out = run(bin, ["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]);
+    if (!out) continue;
+    // One line per GPU. Use the one with the most memory (the conservative choice for fitting a model).
+    const gpus = out
+      .split(/\r?\n/)
+      .map((line) => {
+        const [name, mem] = line.split(",").map((part) => part.trim());
+        return { name, mb: Number(mem) };
+      })
+      .filter((g) => g.name && Number.isFinite(g.mb) && g.mb > 0);
+    if (!gpus.length) continue;
+    const best = gpus.reduce((a, b) => (b.mb > a.mb ? b : a));
+    return { gpu: best.name, vramGB: Math.round((best.mb / 1024) * 10) / 10, unifiedMemory: false };
+  }
+  return null;
 }
 
-function hardware(): Pick<CapabilityProfile, "gpu" | "vramGB" | "diskFreeGB"> {
-  if (process.platform === "win32") {
-    const gpu = command("nvidia-smi", ["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]);
-    if (gpu) {
-      const [name, memory] = gpu.split(",").map((part) => part.trim());
-      return { gpu: name || "NVIDIA GPU", vramGB: memory ? Number(memory) / 1024 : null, diskFreeGB: null };
-    }
-    return { gpu: null, vramGB: null, diskFreeGB: null };
-  }
-
+function detectGpu(): Gpu {
   if (process.platform === "darwin") {
-    const profile = command("system_profiler", ["SPDisplaysDataType", "SPHardwareDataType"]);
-    const gpu = profile.match(/Chipset Model:\s*(.+)/)?.[1]?.trim() ?? null;
-    const memory = profile.match(/Memory:\s*([0-9.]+)\s*GB/i)?.[1];
-    return { gpu, vramGB: memory ? Number(memory) : null, diskFreeGB: null };
+    // Apple Silicon shares memory between CPU and GPU. Intel Macs get no GPU acceleration from Ollama.
+    if (process.arch === "arm64") return { gpu: os.cpus()[0]?.model ?? "Apple Silicon", vramGB: null, unifiedMemory: true };
+    return { gpu: null, vramGB: null, unifiedMemory: false };
   }
+  const nv = nvidia();
+  if (nv) return nv;
+  if (process.platform === "win32") {
+    // AMD / Intel: report the name, but the reported adapter memory is unreliable, so leave VRAM unknown.
+    const names = run("powershell", ["-NoProfile", "-Command", "(Get-CimInstance Win32_VideoController).Name -join '; '"]);
+    return { gpu: names || null, vramGB: null, unifiedMemory: false };
+  }
+  return { gpu: null, vramGB: null, unifiedMemory: false };
+}
 
-  const gpu = command("nvidia-smi", ["--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]);
-  const [name, memory] = gpu.split(",").map((part) => part.trim());
-  return { gpu: name || null, vramGB: memory ? Number(memory) / 1024 : null, diskFreeGB: null };
+// The GPU does not change while the app runs, and detection spawns processes, so do it once.
+let gpuCache: Gpu | null = null;
+
+function freeDiskGB(): number | null {
+  try {
+    const stat = fs.statfsSync(os.homedir());
+    return Math.round(((Number(stat.bavail) * Number(stat.bsize)) / 1024 ** 3) * 10) / 10;
+  } catch {
+    return null;
+  }
 }
 
 export async function detectCapabilities(): Promise<CapabilityProfile> {
-  const disk = process.platform === "win32" ? command("powershell", ["-NoProfile", "-Command", "(Get-PSDrive -Name C).Free"]) : command("df", ["-k", "/"]);
-  const diskFreeGB = numberFrom(disk);
-  const diskGB = process.platform === "win32" ? (diskFreeGB ? diskFreeGB / 1024 ** 3 : null) : diskFreeGB ? diskFreeGB / 1024 ** 2 : null;
+  const gpu = (gpuCache ??= detectGpu());
   return {
     os: process.platform,
+    arch: process.arch,
     cpu: os.cpus()[0]?.model || os.arch(),
     ramGB: Math.round((os.totalmem() / 1024 ** 3) * 10) / 10,
-    ...hardware(),
-    diskFreeGB: diskGB ? Math.round(diskGB * 10) / 10 : null,
+    gpu: gpu.gpu,
+    vramGB: gpu.vramGB,
+    unifiedMemory: gpu.unifiedMemory,
+    diskFreeGB: freeDiskGB(),
     ollama: await isOllamaConnected().catch(() => false),
     docker: dockerAvailable(),
   };
